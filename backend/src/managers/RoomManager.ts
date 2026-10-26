@@ -7,6 +7,8 @@ import FormData from "form-data";
 interface Room {
     user1: User;
     user2: User;
+    ready: Set<string>;
+    started: boolean;
 }
 
 interface ChatMessage {
@@ -35,8 +37,9 @@ export class RoomManager {
     }
 
     createRoom(user1: User, user2: User) {
+        if (user1.socket.id === user2.socket.id || this.socketToRoom.has(user1.socket.id) || this.socketToRoom.has(user2.socket.id)) return;
         const roomId = crypto.randomUUID();
-        this.rooms.set(roomId, { user1, user2 });
+        this.rooms.set(roomId, { user1, user2, ready: new Set(), started: false });
         this.socketToRoom.set(user1.socket.id, roomId);
         this.socketToRoom.set(user2.socket.id, roomId);
         this.audioBuffers.set(user1.socket.id, []);
@@ -44,62 +47,92 @@ export class RoomManager {
 
         user1.socket.join(roomId);
         user2.socket.join(roomId);
-        user1.socket.emit("send-offer", { roomId });
-        user2.socket.emit("send-offer", { roomId });
+        user1.socket.emit("room-ready", { roomId, initiator: true });
+        user2.socket.emit("room-ready", { roomId, initiator: false });
     }
 
-    onAudioChunk(socketId: string, chunk: ArrayBuffer) {
+    onPeerReady(roomId: string, socketId: string) {
+        const room = this.memberRoom(roomId, socketId);
+        if (!room || room.started) return;
+        room.ready.add(socketId);
+        if (room.ready.size === 2) {
+            room.started = true;
+            room.user1.socket.emit("send-offer", { roomId });
+        }
+    }
+
+    private memberRoom(roomId: string, socketId: string) {
+        if (this.socketToRoom.get(socketId) !== roomId) return undefined;
+        return this.rooms.get(roomId);
+    }
+
+    onAudioChunk(socketId: string, chunk: ArrayBuffer, roomId?: string) {
+        const activeRoom = this.socketToRoom.get(socketId);
+        if (!activeRoom || (roomId && roomId !== activeRoom)) return;
         const buf = Buffer.from(chunk);
+        if (!buf.length || buf.length > 500_000) return;
 
         if (!this.audioBuffers.has(socketId)) this.audioBuffers.set(socketId, []);
-        this.audioBuffers.get(socketId)!.push(buf);
+        // Final analysis uses the first clip; retaining every clip grows without bound.
+        const chunks = this.audioBuffers.get(socketId)!;
+        if (chunks.length === 0) chunks.push(buf);
 
         const last = this.lastApiCall.get(socketId) ?? 0;
         const now = Date.now();
         if (now - last < this.COOLDOWN_MS) return;
         if (this.liveProcessing.get(socketId)) return;
 
-        if (buf.length > 500_000) {
-            console.log(`[SKIP] chunk too large: ${buf.length} bytes`);
-            return;
-        }
-
         this.lastApiCall.set(socketId, now);
         this.runLiveScore(socketId, buf);
     }
 
     private async runLiveScore(socketId: string, audioBuffer: Buffer) {
+        const roomId = this.socketToRoom.get(socketId);
+        const room = roomId && this.rooms.get(roomId);
+        if (!room) return;
+        const socket = room.user1.socket.id === socketId ? room.user1.socket : room.user2.socket;
+        const status = (state: string, message: string) => {
+            if (this.socketToRoom.get(socketId) === roomId) {
+                socket.emit("score-status", { roomId, state, message });
+            }
+        };
         this.liveProcessing.set(socketId, true);
+        status("processing", "Analyzing your speech… You can keep talking.");
         try {
             const result = await this.scoreAudioWithGroq(audioBuffer);
 
             console.log(`\n[GROQ LIVE - ${socketId.slice(0, 6)}]`, result);
 
-            if (!result) return;
-
-            const roomId = this.socketToRoom.get(socketId);
-            if (!roomId) return;
-            const room = this.rooms.get(roomId);
-            if (!room) return;
-
-            const userSocket = room.user1.socket.id === socketId
-                ? room.user1.socket
-                : room.user2.socket;
-
-            userSocket.emit("live-score-update", result);
-        } catch (e) {
-            console.error("[live score error]", e);
+            if (this.socketToRoom.get(socketId) !== roomId) return;
+            if (!result) {
+                status("listening", "Not enough clear speech yet. Keep talking; we’ll try again automatically.");
+                return;
+            }
+            socket.emit("live-score-update", { ...result, roomId });
+            status("ready", "Score updated. Listening for your next update.");
+        } catch (error) {
+            const httpStatus = axios.isAxiosError(error) ? error.response?.status : undefined;
+            console.error("[live score error]", {
+                status: httpStatus,
+                code: axios.isAxiosError(error) ? error.code : "invalid_response_or_configuration",
+                stage: axios.isAxiosError(error) && error.config?.url?.endsWith("/transcriptions") ? "transcription" : "evaluation",
+            });
+            const message = httpStatus === 401 || httpStatus === 403
+                ? "Scoring access was rejected. The server’s Groq key or model access needs checking."
+                : httpStatus === 429
+                ? "Scoring is busy. We’ll retry automatically after a short pause."
+                : "Couldn’t analyze that recording. We’ll retry automatically while you speak.";
+            if (httpStatus === 429 && this.socketToRoom.get(socketId) === roomId) this.lastApiCall.set(socketId, Date.now() + 30000);
+            status("error", message);
         } finally {
-            this.liveProcessing.set(socketId, false);
+            if (this.socketToRoom.get(socketId) === roomId) this.liveProcessing.set(socketId, false);
         }
     }
 
-    private async runFinalScore(roomId: string) {
-        const room = this.rooms.get(roomId);
-        if (!room) return;
+    private async runFinalScore(roomId: string, room: Room, buffers: Map<string, Buffer[]>) {
 
         const score = async (socketId: string) => {
-            const chunks = this.audioBuffers.get(socketId) ?? [];
+            const chunks = buffers.get(socketId) ?? [];
             if (chunks.length === 0) return { score: 0, review: "No audio captured." };
 
             const audio = chunks[0];
@@ -108,7 +141,12 @@ export class RoomManager {
                 return { score: 0, review: "Audio too large to analyze." };
             }
 
-            const result = await this.scoreAudioWithGroq(audio) ?? { score: 0, review: "Analysis failed." };
+            let result: ScoreResult;
+            try {
+                result = await this.scoreAudioWithGroq(audio) ?? { score: 0, review: "Not enough clear speech captured to score." };
+            } catch {
+                result = { score: 0, review: "Final analysis unavailable. Please try another call." };
+            }
             console.log(`\n[GROQ FINAL - ${socketId.slice(0, 6)}]`, result);
             return result;
         };
@@ -118,11 +156,12 @@ export class RoomManager {
             score(room.user2.socket.id),
         ]);
 
-        room.user1.socket.emit("final-score", score1);
-        room.user2.socket.emit("final-score", score2);
+        room.user1.socket.emit("final-score", { ...score1, roomId });
+        room.user2.socket.emit("final-score", { ...score2, roomId });
     }
 
     private async scoreAudioWithGroq(audioBuffer: Buffer): Promise<ScoreResult | null> {
+        if (!process.env.GROQ_API_KEY) throw new Error("Scoring is not configured");
         const form = new FormData();
         form.append("file", audioBuffer, {
             filename: "audio.webm",
@@ -134,6 +173,7 @@ export class RoomManager {
             "https://api.groq.com/openai/v1/audio/transcriptions",
             form,
             {
+                timeout: 15000,
                 headers: {
                     Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
                     ...form.getHeaders(),
@@ -149,7 +189,8 @@ export class RoomManager {
         const scoreRes = await axios.post(
             "https://api.groq.com/openai/v1/chat/completions",
             {
-                model: "llama-3.1-8b-instant",
+                model: process.env.GROQ_SCORING_MODEL || "openai/gpt-oss-20b",
+                response_format: { type: "json_object" },
                 messages: [
                     {
                         role: "system",
@@ -187,6 +228,7 @@ Respond ONLY with this JSON format:
                 temperature: 0.3,
             },
             {
+                timeout: 15000,
                 headers: {
                     Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
                     "Content-Type": "application/json",
@@ -199,38 +241,46 @@ Respond ONLY with this JSON format:
 
         try {
             const clean = text.replace(/```json|```/g, "").trim();
-            return JSON.parse(clean) as ScoreResult;
+            const result = JSON.parse(clean) as ScoreResult;
+            if (!Number.isFinite(result.score) || typeof result.review !== "string") {
+                throw new Error("Invalid scoring response");
+            }
+            return { score: Math.max(0, Math.min(10, result.score)), review: result.review };
         } catch {
-            console.error("[groq parse error]", text);
-            return null;
+            throw new Error("Invalid scoring response");
         }
     }
 
     onOffer(roomId: string, sdp: string, senderSocketid: string) {
-        const room = this.rooms.get(roomId);
-        if (!room) return;
+        const room = this.memberRoom(roomId, senderSocketid);
+        if (!room?.started || room.user1.socket.id !== senderSocketid) return;
         const receiver = room.user1.socket.id === senderSocketid ? room.user2 : room.user1;
         receiver.socket.emit("offer", { sdp, roomId });
     }
 
     onAnswer(roomId: string, sdp: string, senderSocketid: string) {
-        const room = this.rooms.get(roomId);
-        if (!room) return;
+        const room = this.memberRoom(roomId, senderSocketid);
+        if (!room?.started || room.user2.socket.id !== senderSocketid) return;
         const receiver = room.user1.socket.id === senderSocketid ? room.user2 : room.user1;
         receiver.socket.emit("answer", { sdp, roomId });
     }
 
-    onIceCandidates(roomId: string, senderSocketid: string, candidate: any, type: "sender" | "receiver") {
-        const room = this.rooms.get(roomId);
+    onIceCandidates(roomId: string, senderSocketid: string, candidate: unknown) {
+        const room = this.memberRoom(roomId, senderSocketid);
         if (!room) return;
         const receiver = room.user1.socket.id === senderSocketid ? room.user2 : room.user1;
-        receiver.socket.emit("add-ice-candidate", { candidate, type });
+        receiver.socket.emit("add-ice-candidate", { candidate, roomId });
+    }
+
+    onRestartIce(roomId: string, socketId: string) {
+        const room = this.memberRoom(roomId, socketId);
+        if (room?.started) room.user1.socket.emit("restart-ice", { roomId });
     }
 
     onMessage(roomId: string, message: ChatMessage, socketId: string) {
-        const room = this.rooms.get(roomId);
+        const room = this.memberRoom(roomId, socketId);
         if (!room) return;
-        this.io.to(roomId).except(socketId).emit("receive-message", message);
+        this.io.to(roomId).except(socketId).emit("receive-message", { ...message, roomId, senderId: socketId });
     }
 
     findRoomBySocketId(socketId: string): { roomId: string; room: Room } | null {
@@ -242,9 +292,12 @@ Respond ONLY with this JSON format:
     }
 
     async deleteRoom(roomId: string) {
-        await this.runFinalScore(roomId);
-
         const room = this.rooms.get(roomId);
+        if (!room) return;
+        const buffers = new Map<string, Buffer[]>([
+            [room.user1.socket.id, this.audioBuffers.get(room.user1.socket.id) ?? []],
+            [room.user2.socket.id, this.audioBuffers.get(room.user2.socket.id) ?? []],
+        ]);
         if (room) {
             this.audioBuffers.delete(room.user1.socket.id);
             this.audioBuffers.delete(room.user2.socket.id);
@@ -259,5 +312,6 @@ Respond ONLY with this JSON format:
         }
 
         this.rooms.delete(roomId);
+        await this.runFinalScore(roomId, room, buffers);
     }
 }

@@ -7,31 +7,41 @@ const Landing = () => {
   const [localVideoTrack, setLocalVideoTrack] = useState<MediaStreamTrack | null>(null);
   const [name, setName] = useState("");
   const [joined, setJoined] = useState(false);
-
-  const getCam = async (): Promise<void> => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
-    });
-
-    const audioTrack = stream.getAudioTracks()[0];
-    const videoTrack = stream.getVideoTracks()[0];
-
-    setLocalAudioTrack(audioTrack);
-    setLocalVideoTrack(videoTrack);
-
-    if (!videoRef.current) return;
-
-    videoRef.current.srcObject = new MediaStream([videoTrack]);
-    await videoRef.current.play();
-  };
+  const [mediaError, setMediaError] = useState("");
+  const [mediaAttempt, setMediaAttempt] = useState(0);
 
   useEffect(() => {
-    getCam();
-  }, []);
+    let cancelled = false;
+    let acquiredStream: MediaStream | undefined;
+    const getMedia = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        if (cancelled) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+        acquiredStream = stream;
+        setMediaError("");
+        setLocalAudioTrack(stream.getAudioTracks()[0]);
+        setLocalVideoTrack(stream.getVideoTracks()[0]);
+        if (videoRef.current) {
+          videoRef.current.srcObject = new MediaStream(stream.getVideoTracks());
+          await videoRef.current.play().catch(() => {});
+        }
+      } catch {
+        if (!cancelled) setMediaError("Camera or microphone unavailable. Allow access, then try again.");
+      }
+    };
+    void getMedia();
+    return () => {
+      cancelled = true;
+      acquiredStream?.getTracks().forEach(track => track.stop());
+    };
+  }, [mediaAttempt]);
 
   if (!joined) {
     const isNameValid = name.trim().length > 0;
+    const canJoin = isNameValid && Boolean(localAudioTrack && localVideoTrack);
 
     return (
       <div className="w-screen h-screen bg-white flex flex-col text-sm text-gray-800">
@@ -68,15 +78,20 @@ const Landing = () => {
 
               <button
                 className={`border px-4 py-1 ${
-                  isNameValid
+                  canJoin
                     ? "border-gray-400 bg-gray-100 hover:bg-gray-200"
                     : "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed"
                 }`}
-                disabled={!isNameValid}
+                disabled={!canJoin}
                 onClick={() => setJoined(true)}
               >
                 Start Chat
               </button>
+
+              <div role="status" className="max-w-64 text-xs text-gray-600">
+                {mediaError || (!localAudioTrack || !localVideoTrack ? "Waiting for camera and microphone access…" : "Camera and microphone ready.")}
+                {mediaError && <button className="ml-2 underline" onClick={() => setMediaAttempt(attempt => attempt + 1)}>Try again</button>}
+              </div>
 
               <div className="text-xs text-gray-500">
                 By clicking “Start Chat”, you agree to Connectly’s terms.

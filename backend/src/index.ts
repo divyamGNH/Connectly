@@ -12,14 +12,16 @@ const server = http.createServer(app);
 
 dotenv.config();
 
-const PORT = process.env.PORT;
+const PORT = Number(process.env.PORT) || 3000;
 
 const CLIENT_URL = process.env.CLIENT_URL;
 
 const allowedOrigins = [
   "http://localhost:5173",
+  "http://127.0.0.1:5173",
   "http://10.250.144.254:5173",
-  "http://172.30.144.1:5173"
+  "http://172.30.144.1:5173",
+  ...(CLIENT_URL ?? "").split(",").map(origin => origin.trim()).filter(Boolean),
 ];
 
 app.use(
@@ -35,7 +37,7 @@ app.use(express.json());
 
 const io = new Server(server, {
   cors: {
-    origin: CLIENT_URL,
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -56,10 +58,6 @@ io.on("connection", (socket) => {
 
   userManager.addUser("randomName", socket);
 
-  socket.on("disconnect", () => {
-    console.log("Disconnected:", socket.id);
-    userManager.endSession(socket);
-  });
 });
 
 

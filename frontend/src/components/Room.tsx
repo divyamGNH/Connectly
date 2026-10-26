@@ -1,8 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Socket, io } from "socket.io-client";
-import { Camera, CameraOff, Mic, MicOff } from "lucide-react";
+import { Camera, CameraOff, Mic, MicOff, LoaderCircle } from "lucide-react";
+import { PeerSession } from "../lib/PeerSession";
 
 const URL = import.meta.env.VITE_BACKEND_URL as string;
+const iceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+if (import.meta.env.VITE_TURN_URLS) {
+  iceServers.push({
+    urls: import.meta.env.VITE_TURN_URLS.split(",").map((url: string) => url.trim()).filter(Boolean),
+    username: import.meta.env.VITE_TURN_USERNAME,
+    credential: import.meta.env.VITE_TURN_CREDENTIAL,
+  });
+}
 
 interface ChatMessage {
   text: string;
@@ -14,6 +23,12 @@ interface ChatMessage {
 interface ScoreResult {
   score: number;
   review: string;
+  roomId?: string;
+}
+
+interface ScoreStatus {
+  state: "waiting" | "listening" | "processing" | "ready" | "error";
+  message: string;
 }
 
 export const Room = ({
@@ -30,8 +45,10 @@ export const Room = ({
   const socketRef = useRef<Socket | null>(null);
   const roomIdRef = useRef<string | null>(null);
 
-  const sendingPcRef = useRef<RTCPeerConnection | null>(null);
-  const receivingPcRef = useRef<RTCPeerConnection | null>(null);
+  const peerRef = useRef<PeerSession | null>(null);
+  const lastRoomIdRef = useRef<string | null>(null);
+  const endCallRef = useRef<() => void>(() => {});
+  const [connectionStatus, setConnectionStatus] = useState("Waiting for a partner…");
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -48,187 +65,256 @@ export const Room = ({
 
   const [liveScore, setLiveScore] = useState<ScoreResult | null>(null);
   const [finalScore, setFinalScore] = useState<ScoreResult | null>(null);
+  const [scoreStatus, setScoreStatus] = useState<ScoreStatus>({ state: "waiting", message: "Join a call to see your speaking score." });
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const stopRecordingRef = useRef<boolean>(false);
+  const recordingRoomRef = useRef<string | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const startAudioStream = (audioTrack: MediaStreamTrack) => {
+  const stopAudioStream = useCallback(() => {
+    stopRecordingRef.current = true;
+    recordingRoomRef.current = null;
+    if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
+    if (scoreTimerRef.current) clearTimeout(scoreTimerRef.current);
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    if (recorder?.state === "recording") recorder.stop();
+  }, []);
+
+  const startAudioStream = useCallback((audioTrack: MediaStreamTrack) => {
+    const roomId = roomIdRef.current;
+    if (!roomId || recordingRoomRef.current === roomId) return;
+    stopAudioStream();
+    if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported("audio/webm")) {
+      setScoreStatus({ state: "error", message: "This browser cannot record audio for scoring. Try Chrome or Edge." });
+      return;
+    }
+    if (audioTrack.readyState === "ended") {
+      setScoreStatus({ state: "error", message: "Microphone disconnected. Rejoin with your microphone enabled." });
+      return;
+    }
+    recordingRoomRef.current = roomId;
     const stream = new MediaStream([audioTrack]);
     stopRecordingRef.current = false;
+    setScoreStatus({ state: "listening", message: "Listening… Speak for about 10 seconds to get your first score." });
 
     const recordAndSend = () => {
-      if (stopRecordingRef.current) return;
+      if (stopRecordingRef.current || recordingRoomRef.current !== roomId) return;
 
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(stream, { mimeType: "audio/webm", audioBitsPerSecond: 64000 });
+      } catch {
+        stopAudioStream();
+        setScoreStatus({ state: "error", message: "Couldn’t start audio recording. Rejoin to try again." });
+        return;
+      }
       const chunks: Blob[] = [];
+      const isCurrent = () => !stopRecordingRef.current && mediaRecorderRef.current === recorder && recordingRoomRef.current === roomId;
 
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
 
       recorder.onstop = async () => {
-        if (stopRecordingRef.current) return;
-        if (!socketRef.current || !roomIdRef.current) return;
-
-        const blob = new Blob(chunks, { type: "audio/webm" });
-
-        if (blob.size > 500_000) {
-          console.log("[SKIP] blob too large:", blob.size);
-          recordAndSend(); // restart anyway
-          return;
+        if (!isCurrent()) return;
+        try {
+          const blob = new Blob(chunks, { type: "audio/webm" });
+          if (!blob.size || blob.size > 500_000) {
+            setScoreStatus({ state: "error", message: "Couldn’t use that recording. Listening again…" });
+          } else if (socketRef.current?.connected && audioTrack.enabled) {
+            const buffer = await blob.arrayBuffer();
+            if (!isCurrent()) return;
+            socketRef.current?.emit("audio-chunk", { roomId, chunk: buffer });
+          }
+        } catch {
+          if (isCurrent()) setScoreStatus({ state: "error", message: "Couldn’t send that recording. Retrying automatically…" });
+        } finally {
+          if (isCurrent()) recordAndSend();
         }
-
-        const buffer = await blob.arrayBuffer();
-        socketRef.current.emit("audio-chunk", {
-          roomId: roomIdRef.current,
-          chunk: buffer,
-        });
-
-        // restart fresh recording immediately
-        recordAndSend();
       };
 
-      recorder.start();
       mediaRecorderRef.current = recorder;
+      recorder.onerror = () => {
+        if (!isCurrent()) return;
+        stopAudioStream();
+        setScoreStatus({ state: "error", message: "Audio recording stopped unexpectedly. Rejoin to try again." });
+      };
+      try {
+        recorder.start();
+      } catch {
+        stopAudioStream();
+        setScoreStatus({ state: "error", message: "Couldn’t start audio recording. Rejoin to try again." });
+        return;
+      }
 
       // stop after 10s — creates a complete valid webm file each time
-      setTimeout(() => {
+      recordingTimerRef.current = setTimeout(() => {
         if (recorder.state === "recording") recorder.stop();
       }, 10000);
     };
 
     recordAndSend();
-  };
-
-  const stopAudioStream = () => {
-    stopRecordingRef.current = true;
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
-    mediaRecorderRef.current = null;
-  };
+  }, [stopAudioStream]);
 
   useEffect(() => {
-    const socket = io(URL);
+    const socket = io(URL, { autoConnect: false });
     socketRef.current = socket;
-    setMySocketId(socket.id!);
-
-    socket.on("send-offer", async ({ roomId }) => {
-      setLobby(false);
-      setFinalScore(null);
-      setLiveScore(null);
-      roomIdRef.current = roomId;
-
-      if (localAudioTrack) startAudioStream(localAudioTrack);
-
-      const pc = new RTCPeerConnection();
-      sendingPcRef.current = pc;
-
-      if (localVideoTrack) pc.addTrack(localVideoTrack);
-      if (localAudioTrack) pc.addTrack(localAudioTrack);
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit("add-ice-candidate", {
-            candidate: e.candidate,
-            type: "sender",
-            roomId,
-          });
-        }
-      };
-
-      pc.onnegotiationneeded = async () => {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit("offer", { roomId, sdp: offer });
-      };
-    });
-
-    socket.on("offer", async ({ roomId, sdp }) => {
-      setLobby(false);
-      setFinalScore(null);
-      setLiveScore(null);
-      roomIdRef.current = roomId;
-
-      if (localAudioTrack) startAudioStream(localAudioTrack);
-
-      const pc = new RTCPeerConnection();
-      receivingPcRef.current = pc;
-
+    const clearCall = () => {
+      roomIdRef.current = null;
+      peerRef.current?.close();
+      peerRef.current = null;
+      stopAudioStream();
       remoteStreamRef.current = new MediaStream();
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStreamRef.current;
-      }
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    };
+    endCallRef.current = clearCall;
 
-      pc.ontrack = (e) => {
-        remoteStreamRef.current.addTrack(e.track);
-      };
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit("add-ice-candidate", {
-            candidate: e.candidate,
-            type: "receiver",
-            roomId,
-          });
-        }
-      };
-
-      await pc.setRemoteDescription(sdp);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socket.emit("answer", { roomId, sdp: answer });
+    socket.on("connect", () => {
+      setMySocketId(socket.id!);
+      setConnectionStatus("Waiting for a partner…");
+      // Every listener is installed before entering matchmaking, including on reconnect.
+      socket.emit("ready");
     });
 
-    socket.on("answer", ({ sdp }) => {
-      sendingPcRef.current?.setRemoteDescription(sdp);
+    socket.on("room-ready", ({ roomId, initiator }: { roomId: string; initiator: boolean }) => {
+      if (roomIdRef.current === roomId && peerRef.current) {
+        socket.emit("peer-ready", { roomId });
+        return;
+      }
+      clearCall();
+      setLobby(false);
+      setMessages([]);
+      setFinalScore(null);
+      setLiveScore(null);
+      roomIdRef.current = roomId;
+      lastRoomIdRef.current = roomId;
+      setConnectionStatus("Partner found. Connecting…");
+      const retry = () => {
+        if (roomIdRef.current !== roomId) return;
+        clearCall();
+        setLobby(true);
+        setConnectionStatus("Couldn’t connect. Finding a partner again…");
+        if (socket.connected) socket.emit("next-connection", { roomId });
+      };
+      try {
+        peerRef.current = new PeerSession({
+          roomId, initiator,
+          tracks: [localAudioTrack, localVideoTrack].filter((track): track is MediaStreamTrack => track !== null),
+          configuration: { iceServers },
+          signal: (event, payload) => { if (socket.connected) socket.emit(event, payload); },
+          onTrack: track => {
+            if (roomIdRef.current !== roomId) return;
+            if (!remoteStreamRef.current.getTracks().some(existing => existing.id === track.id)) remoteStreamRef.current.addTrack(track);
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.srcObject = remoteStreamRef.current;
+              void remoteVideoRef.current.play().catch(() => {
+                if (roomIdRef.current === roomId) setConnectionStatus("Connected. Tap the remote video to play audio.");
+              });
+            }
+          },
+          onStatus: message => { if (roomIdRef.current === roomId) setConnectionStatus(message); },
+          onFailure: retry,
+        });
+      } catch {
+        retry();
+        return;
+      }
+      if (localAudioTrack) startAudioStream(localAudioTrack);
+      else setScoreStatus({ state: "error", message: "No microphone available. Enable microphone access and rejoin." });
+      socket.emit("peer-ready", { roomId });
     });
 
-    socket.on("add-ice-candidate", ({ candidate, type }) => {
-      if (type === "sender") {
-        receivingPcRef.current?.addIceCandidate(candidate);
-      } else {
-        sendingPcRef.current?.addIceCandidate(candidate);
-      }
+    socket.on("send-offer", ({ roomId }) => {
+      if (roomIdRef.current === roomId) void peerRef.current?.offer();
+    });
+    socket.on("offer", ({ roomId, sdp }) => {
+      if (roomIdRef.current === roomId) void peerRef.current?.receiveOffer(sdp);
+    });
+    socket.on("answer", ({ roomId, sdp }) => {
+      if (roomIdRef.current === roomId) void peerRef.current?.receiveAnswer(sdp);
+    });
+    socket.on("add-ice-candidate", ({ roomId, candidate }) => {
+      if (roomIdRef.current === roomId) void peerRef.current?.receiveCandidate(candidate);
+    });
+    socket.on("restart-ice", ({ roomId }) => {
+      if (roomIdRef.current === roomId) peerRef.current?.recover();
     });
 
     socket.on("lobby", () => {
+      clearCall();
       setLobby(true);
+      setConnectionStatus("Waiting for a partner…");
       setMessages([]);
       setLiveScore(null);
-      stopAudioStream();
+      setScoreStatus({ state: "waiting", message: "Waiting for a partner. Your speaking score will appear here." });
     });
 
-    socket.on("receive-message", (message: ChatMessage) => {
-      setMessages((prev) => [...prev, message]);
+    socket.on("receive-message", (message: ChatMessage & { roomId: string }) => {
+      if (message.roomId === roomIdRef.current) setMessages((prev) => [...prev, message]);
     });
 
     socket.on("live-score-update", (result: ScoreResult) => {
+      if (result.roomId && result.roomId !== roomIdRef.current) return;
       console.log("live score:", result);
       setLiveScore(result);
+      setFinalScore(null);
+      if (scoreTimerRef.current) clearTimeout(scoreTimerRef.current);
+      setScoreStatus({ state: "ready", message: "Score updated. Listening for your next update." });
+    });
+
+    socket.on("score-status", (status: ScoreStatus & { roomId: string }) => {
+      if (status.roomId !== roomIdRef.current) return;
+      if (scoreTimerRef.current) clearTimeout(scoreTimerRef.current);
+      setScoreStatus(status);
+      if (status.state === "processing") {
+        scoreTimerRef.current = setTimeout(() => {
+          setScoreStatus({ state: "error", message: "Scoring is taking longer than expected. Keep speaking; we’ll retry automatically." });
+        }, 35000);
+      }
+    });
+
+    socket.on("disconnect", () => {
+      clearCall();
+      setLobby(true);
+      setLiveScore(null);
+      setConnectionStatus("Connection lost. Reconnecting…");
+      setScoreStatus({ state: "error", message: "Connection lost. Reconnecting…" });
+    });
+
+    socket.on("connect_error", () => {
+      setConnectionStatus("Can’t reach the server. Reconnecting…");
+      setScoreStatus({ state: "error", message: "Can’t reach the server. Reconnecting…" });
     });
 
     socket.on("final-score", (result: ScoreResult) => {
+      if (result.roomId && result.roomId !== lastRoomIdRef.current) return;
       console.log("final score:", result);
       setFinalScore(result);
       setLiveScore(null);
     });
 
+    socket.connect();
     return () => {
+      socket.removeAllListeners();
       socket.disconnect();
-      stopAudioStream();
+      clearCall();
+      socketRef.current = null;
+      endCallRef.current = () => {};
     };
-  }, [localAudioTrack, localVideoTrack]);
+  }, [localAudioTrack, localVideoTrack, startAudioStream, stopAudioStream]);
 
   useEffect(() => {
     if (localVideoRef.current && localVideoTrack) {
       localVideoRef.current.srcObject = new MediaStream([localVideoTrack]);
-      localVideoRef.current.play();
+      void localVideoRef.current.play().catch(() => {});
     }
   }, [localVideoTrack]);
 
   const handleSend = () => {
-    if (!socketRef.current || !roomIdRef.current) return;
+    if (!socketRef.current?.connected || !roomIdRef.current) return;
     const text = message.trim();
     if (!text) return;
 
@@ -268,9 +354,12 @@ export const Room = ({
   };
 
   const handleNextConnection = () => {
-    if (!socketRef.current || lobby) return;
-    stopAudioStream();
-    socketRef.current.emit("next-connection", socketRef.current.id);
+    const roomId = roomIdRef.current;
+    if (!socketRef.current?.connected || !roomId || lobby) return;
+    endCallRef.current();
+    setLobby(true);
+    setConnectionStatus("Finding your next partner…");
+    socketRef.current.emit("next-connection", { roomId });
   };
 
   return (
@@ -281,7 +370,7 @@ export const Room = ({
           CONNECTLY
         </div>
         <div className="text-gray-600">
-          You are now chatting with a random stranger.
+          <span role="status" data-testid="connection-status">{connectionStatus}</span>
         </div>
         <div className="text-gray-500">×</div>
       </div>
@@ -293,13 +382,14 @@ export const Room = ({
           <div className="flex-1 border border-gray-300 bg-black relative rounded overflow-hidden">
             <video
               ref={remoteVideoRef}
+              onClick={() => { void remoteVideoRef.current?.play().then(() => setConnectionStatus("Connected")).catch(() => setConnectionStatus("Tap the video again to play audio.")); }}
               autoPlay
               playsInline
               className="w-full h-full object-cover"
             />
-            {lobby && (
-              <div className="absolute inset-0 flex items-center justify-center text-gray-300">
-                Connecting...
+            {connectionStatus !== "Connected" && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-gray-300">
+                <span className="p-4 text-center pointer-events-none">{connectionStatus}</span>
               </div>
             )}
           </div>
@@ -322,6 +412,7 @@ export const Room = ({
             {/* Controls */}
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-4">
               <button
+                aria-label={isCameraOn ? "Turn camera off" : "Turn camera on"}
                 onClick={toggleCamera}
                 className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg ${
                   isCameraOn
@@ -337,6 +428,7 @@ export const Room = ({
               </button>
 
               <button
+                aria-label={isMicOn ? "Mute microphone" : "Unmute microphone"}
                 onClick={toggleMic}
                 className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg ${
                   isMicOn
@@ -366,8 +458,17 @@ export const Room = ({
           </div>
 
           {/* Score Box */}
-          {(liveScore || finalScore) && (
-            <div className="border border-gray-300 rounded p-2 bg-gray-50 text-xs">
+            <div className="shrink-0 border border-gray-300 rounded p-3 bg-gray-50 text-sm" data-testid="speaking-score">
+              <div className="font-semibold">Speaking score</div>
+              <div role="status" aria-live="polite" aria-atomic="true" className={`mt-1 flex items-start gap-2 ${scoreStatus.state === "error" ? "text-amber-800" : "text-gray-600"}`}>
+                {!lobby && isMicOn && scoreStatus.state === "processing" ? (
+                  <LoaderCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 motion-safe:animate-spin" />
+                ) : !lobby && isMicOn && (scoreStatus.state === "listening" || scoreStatus.state === "ready") ? (
+                  <Mic aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-blue-700 motion-safe:animate-pulse" />
+                ) : null}
+                <span>{!lobby && !isMicOn ? "Microphone muted. Unmute to continue scoring." : scoreStatus.message}</span>
+              </div>
+              <div className="mt-2">
               {finalScore ? (
                 <>
                   <div className="font-semibold text-green-700">
@@ -383,8 +484,8 @@ export const Room = ({
                   <div className="text-gray-600 mt-1">{liveScore.review}</div>
                 </>
               ) : null}
+              </div>
             </div>
-          )}
         </div>
 
         {/* RIGHT: Chat */}
