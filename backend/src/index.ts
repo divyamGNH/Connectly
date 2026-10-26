@@ -16,9 +16,15 @@ const PORT = process.env.PORT;
 
 const CLIENT_URL = process.env.CLIENT_URL;
 
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://10.250.144.254:5173",
+  "http://172.30.144.1:5173"
+];
+
 app.use(
   cors({
-    origin: CLIENT_URL,
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true,
   })

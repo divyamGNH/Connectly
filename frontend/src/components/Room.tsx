@@ -11,6 +11,11 @@ interface ChatMessage {
   timeStamp: number;
 }
 
+interface ScoreResult {
+  score: number;
+  review: string;
+}
+
 export const Room = ({
   name,
   localAudioTrack,
@@ -41,6 +46,68 @@ export const Room = ({
   const [isCameraOn, setIsCameraOn] = useState(true);
   const [isMicOn, setIsMicOn] = useState(true);
 
+  const [liveScore, setLiveScore] = useState<ScoreResult | null>(null);
+  const [finalScore, setFinalScore] = useState<ScoreResult | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const stopRecordingRef = useRef<boolean>(false);
+
+  const startAudioStream = (audioTrack: MediaStreamTrack) => {
+    const stream = new MediaStream([audioTrack]);
+    stopRecordingRef.current = false;
+
+    const recordAndSend = () => {
+      if (stopRecordingRef.current) return;
+
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      const chunks: Blob[] = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        if (stopRecordingRef.current) return;
+        if (!socketRef.current || !roomIdRef.current) return;
+
+        const blob = new Blob(chunks, { type: "audio/webm" });
+
+        if (blob.size > 500_000) {
+          console.log("[SKIP] blob too large:", blob.size);
+          recordAndSend(); // restart anyway
+          return;
+        }
+
+        const buffer = await blob.arrayBuffer();
+        socketRef.current.emit("audio-chunk", {
+          roomId: roomIdRef.current,
+          chunk: buffer,
+        });
+
+        // restart fresh recording immediately
+        recordAndSend();
+      };
+
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+
+      // stop after 10s — creates a complete valid webm file each time
+      setTimeout(() => {
+        if (recorder.state === "recording") recorder.stop();
+      }, 10000);
+    };
+
+    recordAndSend();
+  };
+
+  const stopAudioStream = () => {
+    stopRecordingRef.current = true;
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+  };
+
   useEffect(() => {
     const socket = io(URL);
     socketRef.current = socket;
@@ -48,7 +115,11 @@ export const Room = ({
 
     socket.on("send-offer", async ({ roomId }) => {
       setLobby(false);
+      setFinalScore(null);
+      setLiveScore(null);
       roomIdRef.current = roomId;
+
+      if (localAudioTrack) startAudioStream(localAudioTrack);
 
       const pc = new RTCPeerConnection();
       sendingPcRef.current = pc;
@@ -75,6 +146,11 @@ export const Room = ({
 
     socket.on("offer", async ({ roomId, sdp }) => {
       setLobby(false);
+      setFinalScore(null);
+      setLiveScore(null);
+      roomIdRef.current = roomId;
+
+      if (localAudioTrack) startAudioStream(localAudioTrack);
 
       const pc = new RTCPeerConnection();
       receivingPcRef.current = pc;
@@ -101,7 +177,6 @@ export const Room = ({
       await pc.setRemoteDescription(sdp);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-
       socket.emit("answer", { roomId, sdp: answer });
     });
 
@@ -120,16 +195,29 @@ export const Room = ({
     socket.on("lobby", () => {
       setLobby(true);
       setMessages([]);
+      setLiveScore(null);
+      stopAudioStream();
     });
 
     socket.on("receive-message", (message: ChatMessage) => {
       setMessages((prev) => [...prev, message]);
     });
 
+    socket.on("live-score-update", (result: ScoreResult) => {
+      console.log("live score:", result);
+      setLiveScore(result);
+    });
+
+    socket.on("final-score", (result: ScoreResult) => {
+      console.log("final score:", result);
+      setFinalScore(result);
+      setLiveScore(null);
+    });
+
     return () => {
       socket.disconnect();
+      stopAudioStream();
     };
-    
   }, [localAudioTrack, localVideoTrack]);
 
   useEffect(() => {
@@ -141,7 +229,6 @@ export const Room = ({
 
   const handleSend = () => {
     if (!socketRef.current || !roomIdRef.current) return;
-
     const text = message.trim();
     if (!text) return;
 
@@ -182,6 +269,7 @@ export const Room = ({
 
   const handleNextConnection = () => {
     if (!socketRef.current || lobby) return;
+    stopAudioStream();
     socketRef.current.emit("next-connection", socketRef.current.id);
   };
 
@@ -276,6 +364,27 @@ export const Room = ({
               </button>
             </div>
           </div>
+
+          {/* Score Box */}
+          {(liveScore || finalScore) && (
+            <div className="border border-gray-300 rounded p-2 bg-gray-50 text-xs">
+              {finalScore ? (
+                <>
+                  <div className="font-semibold text-green-700">
+                    Final Score: {finalScore.score}/10
+                  </div>
+                  <div className="text-gray-600 mt-1">{finalScore.review}</div>
+                </>
+              ) : liveScore ? (
+                <>
+                  <div className="font-semibold text-blue-600">
+                    Live: {liveScore.score}/10
+                  </div>
+                  <div className="text-gray-600 mt-1">{liveScore.review}</div>
+                </>
+              ) : null}
+            </div>
+          )}
         </div>
 
         {/* RIGHT: Chat */}

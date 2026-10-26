@@ -7,7 +7,14 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "cypress run",
+    "test:e2e:open": "cypress open",
+    "test:e2e:headless": "cypress run --headless",
+    "test:e2e:user-flow": "cypress run --spec 'cypress/e2e/user-flow.cy.ts'",
+    "test:e2e:interactions": "cypress run --spec 'cypress/e2e/detailed-interactions.cy.ts'",
+    "test:e2e:realtime": "cypress run --spec 'cypress/e2e/realtime-communication.cy.ts'",
+    "test:e2e:white-box": "cypress run --spec 'cypress/e2e/white-box.cy.ts'"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.18",
@@ -25,6 +32,7 @@
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "cypress": "^15.13.0",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
