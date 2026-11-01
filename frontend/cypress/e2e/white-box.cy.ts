@@ -1,6 +1,6 @@
 /// <reference types="cypress" />
 
-describe('Connectly - White Box Tests', () => {
+describe('Fluely - White Box Tests', () => {
   const BASE_URL = 'http://localhost:5173';
 
   beforeEach(() => {

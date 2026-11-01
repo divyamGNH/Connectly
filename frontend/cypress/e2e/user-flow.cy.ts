@@ -1,6 +1,6 @@
 /// <reference types="cypress" />
 
-describe('Connectly - Landing Page Tests', () => {
+describe('Fluely - Landing Page Tests', () => {
   const BASE_URL = 'http://localhost:5173';
 
   beforeEach(() => {
@@ -15,8 +15,8 @@ describe('Connectly - Landing Page Tests', () => {
   });
 
   describe('Landing Page UI', () => {
-    it('should display CONNECTLY header', () => {
-      cy.contains('CONNECTLY', { timeout: 3000 }).should('be.visible');
+    it('should display FLUELY header', () => {
+      cy.contains('FLUELY', { timeout: 3000 }).should('be.visible');
     });
 
     it('should display video preview', () => {
@@ -36,7 +36,7 @@ describe('Connectly - Landing Page Tests', () => {
     });
 
     it('should show terms text', () => {
-      cy.contains("By clicking \"Start Chat\", you agree to Connectly's terms", { timeout: 3000 }).should('be.visible');
+      cy.contains("By clicking \"Start Chat\", you agree to Fluely's terms", { timeout: 3000 }).should('be.visible');
     });
   });
 

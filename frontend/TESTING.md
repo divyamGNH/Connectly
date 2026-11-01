@@ -1,8 +1,8 @@
-# Connectly E2E Testing Guide (Black Box Testing)
+# Fluely E2E Testing Guide (Black Box Testing)
 
 ## Overview
 
-This project includes comprehensive **end-to-end (E2E) tests** using **Cypress** to validate the Connectly application from a user's perspective. These are **black box tests** - they don't rely on internal implementation details, only on what users see and interact with.
+This project includes comprehensive **end-to-end (E2E) tests** using **Cypress** to validate the Fluely application from a user's perspective. These are **black box tests** - they don't rely on internal implementation details, only on what users see and interact with.
 
 ## Test Structure
 

@@ -1,4 +1,4 @@
-# Connectly Testing Strategy: White Box vs Black Box
+# Fluely Testing Strategy: White Box vs Black Box
 
 ## Quick Reference
 
@@ -147,7 +147,7 @@ describe('Password Hashing - Internal Logic', () => {
 ```
 User's Perspective (Black Box):
 1. Open app
-2. See "CONNECTLY" header ✓
+2. See "FLUELY" header ✓
 3. See video preview ✓
 4. See name input field ✓
 5. Try to click "Start Chat" → button disabled ✓

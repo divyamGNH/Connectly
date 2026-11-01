@@ -1,6 +1,6 @@
 /// <reference types="cypress" />
 
-describe('Connectly - WebRTC Connection Tests', () => {
+describe('Fluely - WebRTC Connection Tests', () => {
   const BASE_URL = 'http://localhost:5173';
 
   beforeEach(() => {

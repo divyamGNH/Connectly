@@ -24,6 +24,7 @@ interface ScoreResult {
   score: number;
   review: string;
   roomId?: string;
+  source?: "ai" | "demo";
 }
 
 interface ScoreStatus {
@@ -367,7 +368,7 @@ export const Room = ({
       {/* Header */}
       <div className="border-b border-gray-300 px-4 py-2 flex justify-between items-center">
         <div className="font-extrabold tracking-[0.35em] select-none">
-          CONNECTLY
+          FLUELY
         </div>
         <div className="text-gray-600">
           <span role="status" data-testid="connection-status">{connectionStatus}</span>
@@ -489,34 +490,39 @@ export const Room = ({
         </div>
 
         {/* RIGHT: Chat */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 p-4 overflow-y-auto">
+        <div className="min-w-0 flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 space-y-3 bg-[#efeae2] p-4 overflow-y-auto" role="log" aria-label="Chat messages" aria-live="polite">
             {messages.map((msg, idx) => {
               const isMe = msg.senderId === mySocketId;
               return (
-                <div key={idx}>
-                  <span className="font-semibold">
-                    {isMe ? "You" : msg.senderName}
-                  </span>
-                  <span>{`: ${msg.text}`}</span>
-                  <span className="ml-2 text-xs text-gray-400">
-                    {new Date(msg.timeStamp).toLocaleTimeString()}
-                  </span>
+                <div key={idx} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
+                  <div className={`min-w-0 max-w-[85%] rounded-xl px-3 py-2 shadow-sm ${
+                    isMe ? "rounded-tr-none bg-[#d9fdd3]" : "rounded-tl-none bg-white"
+                  }`}>
+                    <div className={`mb-1 text-xs font-semibold ${isMe ? "text-green-900" : "text-teal-800"}`}>
+                      {isMe ? "You" : msg.senderName}
+                    </div>
+                    <p className="whitespace-pre-wrap [overflow-wrap:anywhere] text-sm leading-relaxed text-gray-900" dir="auto">{msg.text}</p>
+                    <time className={`mt-1 block text-right text-[11px] ${isMe ? "text-green-900" : "text-gray-600"}`} dateTime={new Date(msg.timeStamp).toISOString()}>
+                      {new Date(msg.timeStamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </time>
+                  </div>
                 </div>
               );
             })}
 
             {lobby && (
-              <div className="text-gray-600">
+              <div className="py-2 text-center text-sm text-gray-600">
                 Looking for someone you can chat with ...
               </div>
             )}
           </div>
 
-          <div className="border-t border-gray-300 p-2 flex gap-2">
+          <div className="border-t border-gray-300 bg-gray-50 p-3 flex gap-2">
             <input
               type="text"
-              className="flex-1 border border-gray-300 px-2 py-1 outline-none"
+              className="min-w-0 flex-1 rounded-full border border-gray-300 bg-white px-4 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-teal-700"
+              aria-label="Message"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -524,7 +530,7 @@ export const Room = ({
             />
             <button
               onClick={handleSend}
-              className="px-4 py-1 border border-gray-400 bg-gray-100 hover:bg-gray-200"
+              className="rounded-full bg-teal-800 px-5 py-2 text-sm font-semibold text-white hover:bg-teal-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800"
             >
               Send
             </button>

@@ -47,7 +47,7 @@ const Landing = () => {
       <div className="w-screen h-screen bg-white flex flex-col text-sm text-gray-800">
         {/* Top */}
         <div className="border-b border-gray-300 px-4 py-2 font-extrabold tracking-[0.35em] select-none">
-          CONNECTLY
+          FLUELY
         </div>
 
         {/* Content */}
@@ -94,7 +94,7 @@ const Landing = () => {
               </div>
 
               <div className="text-xs text-gray-500">
-                By clicking “Start Chat”, you agree to Connectly’s terms.
+                By clicking “Start Chat”, you agree to Fluely’s terms.
               </div>
             </div>
           </div>

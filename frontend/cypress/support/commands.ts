@@ -1,7 +1,7 @@
 /// <reference types="cypress" />
 
 /**
- * Custom Commands for Connectly Tests
+ * Custom Commands for Fluely Tests
  */
 
 // Login to app (navigate and enter name)
