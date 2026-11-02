@@ -32,17 +32,23 @@ The application uses the Fluely name. Older screenshots retain the branding capt
 
 ## Repository contents
 
+The current application source is in **`Code Implementation/`**. The former root-level `frontend/` and `backend/` copies have been removed to avoid running an outdated version.
+
 | Location | Contents |
 | --- | --- |
-| `frontend/` | Web interface, browser media handling, peer connection logic, and browser tests |
-| `backend/` | Event server, matchmaking, room handling, speech evaluation, and backend tests |
-| `resources/main.tex` | Main report source, including the SRS and design sections |
-| `resources/main.pdf` | Compiled project report |
-| `resources/report/` | Shared requirements and architecture chapters |
-| `resources/diagrams/` | Diagram assets in PDF, PNG, and SVG formats |
-| `resources/landing.jpeg`, `resources/room.jpeg` | Original implementation screenshots |
-| `frontend/TESTING.md`, `frontend/TESTING_STRATEGY.md` | Browser testing documentation |
-| `RELIABILITY.md` | Connection recovery and deployment configuration notes |
+| `Code Implementation/frontend/` | Current frontend, browser media and peer connection code |
+| `Code Implementation/backend/` | Current event server, matchmaking, room handling and speech evaluation |
+| `Code Implementation/test/` | Integrated verification runner and browser harness |
+| `Code Implementation/TESTING.md` | Instructions for running the complete verification suite |
+| `Code Implementation/RELIABILITY.md` | Connection and feedback configuration notes |
+
+After pulling `lang`, open `Code Implementation` to work on the application. From the repository root, run:
+
+```powershell
+cd "Code Implementation"
+```
+
+The setup commands below start at the repository root unless a different working folder is specified.
 
 ## Software and hardware requirements
 
@@ -54,7 +60,7 @@ The application uses the Fluely name. Older screenshots retain the branding capt
 
 ## Configure the application
 
-Create `backend/.env`:
+Create `Code Implementation/backend/.env`:
 
 ```dotenv
 PORT=3000
@@ -65,13 +71,13 @@ GROQ_SCORING_MODEL=openai/gpt-oss-20b
 
 `GROQ_SCORING_MODEL` is optional; the value shown is the current source-code default. Speech feedback requires access to both the transcription and configured scoring models. Without a valid key, calls and chat can still be used, but speech evaluation will be unavailable.
 
-Create `frontend/.env`:
+Create `Code Implementation/frontend/.env`:
 
 ```dotenv
 VITE_BACKEND_URL=http://localhost:3000
 ```
 
-If a TURN relay is available, optionally add its browser client configuration to `frontend/.env`:
+If a TURN relay is available, optionally add its browser client configuration to `Code Implementation/frontend/.env`:
 
 ```dotenv
 VITE_TURN_URLS=turn:your-relay.example:3478,turns:your-relay.example:5349
@@ -86,7 +92,7 @@ Replace the placeholders with working configuration. Keep the Groq API key on th
 Open a terminal at the repository root and start the backend:
 
 ```powershell
-cd backend
+cd "Code Implementation/backend"
 npm install
 npm run dev
 ```
@@ -94,7 +100,7 @@ npm run dev
 In a second terminal at the repository root, start the frontend:
 
 ```powershell
-cd frontend
+cd "Code Implementation/frontend"
 npm install
 npm run dev -- --host localhost --port 5173 --strictPort
 ```
@@ -116,14 +122,14 @@ Use headphones during a same-room demonstration to reduce audio feedback.
 
 ## Build and verification commands
 
-Backend, from `backend/`:
+Backend, from `Code Implementation/backend/`:
 
 ```powershell
 npm run build
 npm start
 ```
 
-Frontend, from `frontend/`:
+Frontend, from `Code Implementation/frontend/`:
 
 ```powershell
 npm run build
@@ -133,10 +139,10 @@ npm run preview
 Regression checks, from their respective folders:
 
 ```powershell
-# backend/
+# Code Implementation/backend/
 npm test
 
-# frontend/
+# Code Implementation/frontend/
 npm run test:webrtc
 npm run lint
 npm run test:e2e
@@ -154,6 +160,6 @@ For Cypress browser tests, run the backend and frontend first. See the testing g
 
 ## Report and remaining submission materials
 
-To build the report in Overleaf, upload the complete `resources/` folder and select `main.tex` as the main document. Keep its `report/` and `diagrams/` subfolders together.
+To build the report in Overleaf, upload the complete `Fluely_Report_Code/` folder and select `main.tex` as the main document. Keep its `report/` and `diagrams/` subfolders together.
 
-The editable Word report and presentation will be prepared separately. Individual contributions must be documented using the group's actual work; this README does not assign or invent contributions.
+The editable Word report and presentation are maintained separately from the application source. Individual contributions must be documented using the group's actual work; this README does not assign or invent contributions.
