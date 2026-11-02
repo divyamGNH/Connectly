@@ -28,7 +28,7 @@ Fluely connects two ready participants for a browser-based audio/video conversat
 
 The frontend uses React, TypeScript, Vite, Tailwind CSS, and WebRTC. The backend uses Node.js, Express, TypeScript, and Socket.IO. Matching uses a FIFO queue; users and rooms are held in server memory. The current implementation does not require a database or an account login.
 
-The application and older screenshots may still display the previous project name, Connectly.
+The application uses the Fluely name. Older screenshots retain the branding captured when they were taken.
 
 ## Repository contents
 
