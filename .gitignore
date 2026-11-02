@@ -75,6 +75,9 @@ Thumbs.db
 # Misc
 # -------------------------
 coverage/
+test-results/
+frontend/cypress/screenshots/
+frontend/cypress/videos/
 .sass-cache/
 .parcel-cache/
 .next/
