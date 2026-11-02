@@ -1,0 +1,102 @@
+import { Socket } from "socket.io";
+import { RoomManager } from "./RoomManager";
+
+export interface User {
+  socket: Socket;
+  name: string;
+}
+
+export class UserManager {
+  private users = new Map<string, User>();
+  private queue: string[] = [];
+  private roomManger: RoomManager;
+
+  constructor(roomManager: RoomManager) {
+    this.roomManger = roomManager;
+  }
+
+  addUser(name: string, socket: Socket) {
+    if (this.users.has(socket.id)) return;
+    this.users.set(socket.id, { name, socket });
+    this.initHandlers(socket);
+    socket.emit("lobby");
+  }
+
+  private enqueue(socketId: string) {
+    const user = this.users.get(socketId);
+    if (!user?.socket.connected || this.roomManger.findRoomBySocketId(socketId)) return;
+    if (!this.queue.includes(socketId)) this.queue.push(socketId);
+  }
+
+  nextConnection(socketId: string, roomId: string) {
+    const found = this.roomManger.findRoomBySocketId(socketId);
+    if (!found || found.roomId !== roomId) return;
+    const users = [found.room.user1, found.room.user2];
+    void this.roomManger.deleteRoom(roomId);
+    for (const user of users) {
+      if (!user.socket.connected) continue;
+      user.socket.emit("lobby");
+      this.enqueue(user.socket.id);
+    }
+    this.clearQueue();
+  }
+
+  clearQueue() {
+    // Prune stale/duplicate entries before selecting partners.
+    this.queue = [...new Set(this.queue)].filter(id =>
+      this.users.get(id)?.socket.connected && !this.roomManger.findRoomBySocketId(id)
+    );
+    while (this.queue.length >= 2) {
+      const first = this.users.get(this.queue.shift()!)!;
+      const second = this.users.get(this.queue.shift()!)!;
+      this.roomManger.createRoom(first, second);
+    }
+  }
+
+  private initHandlers(socket: Socket) {
+    socket.on("ready", () => {
+      this.enqueue(socket.id);
+      this.clearQueue();
+    });
+    socket.on("peer-ready", (payload) => {
+      if (typeof payload?.roomId === "string") this.roomManger.onPeerReady(payload.roomId, socket.id);
+    });
+    socket.on("offer", (payload) => {
+      if (typeof payload?.roomId === "string" && payload.sdp) this.roomManger.onOffer(payload.roomId, payload.sdp, socket.id);
+    });
+    socket.on("answer", (payload) => {
+      if (typeof payload?.roomId === "string" && payload.sdp) this.roomManger.onAnswer(payload.roomId, payload.sdp, socket.id);
+    });
+    socket.on("add-ice-candidate", (payload) => {
+      if (typeof payload?.roomId === "string" && payload.candidate) this.roomManger.onIceCandidates(payload.roomId, socket.id, payload.candidate);
+    });
+    socket.on("restart-ice", (payload) => {
+      if (typeof payload?.roomId === "string") this.roomManger.onRestartIce(payload.roomId, socket.id);
+    });
+    socket.on("send-message", (payload) => {
+      if (typeof payload?.roomId === "string") this.roomManger.onMessage(payload.roomId, payload.message, socket.id);
+    });
+    socket.on("next-connection", (payload) => {
+      if (typeof payload?.roomId === "string") this.nextConnection(socket.id, payload.roomId);
+    });
+    socket.on("disconnect", () => this.endSession(socket));
+    socket.on("audio-chunk", (payload) => {
+      if (typeof payload?.roomId === "string") this.roomManger.onAudioChunk(socket.id, payload.chunk, payload.roomId);
+    });
+  }
+
+  endSession(socket: Socket) {
+    if (!this.users.delete(socket.id)) return;
+    this.queue = this.queue.filter(id => id !== socket.id);
+    const found = this.roomManger.findRoomBySocketId(socket.id);
+    if (found) {
+      const remaining = found.room.user1.socket.id === socket.id ? found.room.user2 : found.room.user1;
+      void this.roomManger.deleteRoom(found.roomId);
+      if (remaining.socket.connected) {
+        remaining.socket.emit("lobby");
+        this.enqueue(remaining.socket.id);
+      }
+    }
+    this.clearQueue();
+  }
+}

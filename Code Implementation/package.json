@@ -1,0 +1,10 @@
+{
+  "name": "fluely-verification",
+  "private": true,
+  "scripts": {
+    "test": "node test/run-all.mjs",
+    "test:open": "node test/run-all.mjs --open",
+    "test:unit": "node test/run-all.mjs --unit",
+    "test:browser": "node test/run-all.mjs --browser"
+  }
+}

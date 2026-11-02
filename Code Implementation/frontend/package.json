@@ -1,0 +1,48 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "test": "npm run test:webrtc && npm run test:types",
+    "test:types": "tsc -p tsconfig.cypress.json",
+    "test:webrtc": "node --experimental-strip-types --test test/peer-session.test.mjs",
+    "preview": "vite preview",
+    "test:e2e": "cypress run",
+    "test:e2e:open": "node ../test/run-all.mjs --open",
+    "test:e2e:headless": "cypress run --headless",
+    "test:e2e:user-flow": "cypress run --spec 'cypress/e2e/user-flow.cy.ts'",
+    "test:e2e:interactions": "cypress run --spec 'cypress/e2e/detailed-interactions.cy.ts'",
+    "test:e2e:realtime": "cypress run --spec 'cypress/e2e/realtime-communication.cy.ts'",
+    "test:e2e:white-box": "cypress run --spec 'cypress/e2e/white-box.cy.ts'"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "axios": "^1.13.2",
+    "crypto": "^1.0.1",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "socket.io-client": "^4.8.1",
+    "tailwindcss": "^4.1.18"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "cypress": "^15.13.0",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "react-router-dom": "^7.10.1",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vite": "^7.2.4"
+  }
+}

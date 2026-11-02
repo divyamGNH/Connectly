@@ -1,0 +1,84 @@
+# -------------------------
+# Node
+# -------------------------
+node_modules/
+**/node_modules/
+
+# -------------------------
+# Environment files
+# -------------------------
+.env
+*.env
+**/.env
+**/*.env
+
+# For dotenv variants
+.env.local
+.env.development
+.env.production
+.env.test
+
+# -------------------------
+# Logs
+# -------------------------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+*.log
+
+# -------------------------
+# Build / Output directories
+# -------------------------
+dist/
+build/
+frontend/build/
+frontend/dist/
+backend/build/
+backend/dist/
+
+# -------------------------
+# OS / IDE files
+# -------------------------
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
+.history/
+
+# JetBrains
+.idea/
+
+# -------------------------
+# Temporary files
+# -------------------------
+.temp
+.tmp
+.cache/
+**/.cache/
+
+# -------------------------
+# TypeScript (if using)
+# -------------------------
+*.tsbuildinfo
+
+# -------------------------
+# React Native (ignore if not needed)
+# -------------------------
+.expo/
+.expo-shared/
+
+# -------------------------
+# Misc
+# -------------------------
+coverage/
+test-results/
+frontend/cypress/screenshots/
+frontend/cypress/videos/
+.sass-cache/
+.parcel-cache/
+.next/
+out/
